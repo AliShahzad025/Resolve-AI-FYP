@@ -1,0 +1,45 @@
+import { useEffect, useState } from 'react';
+import { LayoutDashboard, Package, MessageSquare, BookOpen, Settings as SettingsIcon, ChevronsUpDown, Search, Bell, ArrowUpRight, ChevronRight, LogOut, Menu, X, Check, CircleHelp } from 'lucide-react';
+import Auth from './Auth';
+import Overview from './Overview';
+import Orders from './Orders';
+import Complaints from './Complaints';
+import Policies from './Policies';
+import Settings from './Settings';
+import { Avatar, Modal } from './components';
+import * as seed from './data';
+import { usePersisted } from './store';
+import type { Complaint, Page } from './types';
+
+const nav=[{id:'overview',label:'Overview',icon:LayoutDashboard},{id:'complaints',label:'Complaints',icon:MessageSquare},{id:'orders',label:'Orders & risk',icon:Package},{id:'policies',label:'Policy library',icon:BookOpen},{id:'settings',label:'Settings',icon:SettingsIcon}] as const;
+function currentPage(): Page { const p=location.hash.split('/')[1];return nav.some(n=>n.id===p)?p as Page:'overview'; }
+
+export default function App(){
+  const [page,setPage]=useState<Page>(currentPage); const [auth,setAuth]=useState(location.hash==='#/login'); const [user,setUser]=usePersisted('user','Muhammad Ali');
+  const [cases,setCases]=usePersisted('complaints',seed.complaints); const [policies,setPolicies]=usePersisted('policies',seed.policies); const [staff,setStaff]=usePersisted('staff',seed.staff); const [settings,setSettings]=usePersisted('settings',seed.settings);
+  const [selectedCase,setSelectedCase]=useState('CS-0241');const [selectedOrder,setSelectedOrder]=useState<string|null>(null);const [toast,setToast]=useState('');const [menu,setMenu]=useState(false);const [search,setSearch]=useState(false);const [query,setQuery]=useState('');const [notifications,setNotifications]=useState(false);const [help,setHelp]=useState(false);
+  useEffect(()=>{const sync=()=>{setPage(currentPage());setAuth(location.hash==='#/login');setMenu(false);};window.addEventListener('hashchange',sync);return ()=>window.removeEventListener('hashchange',sync);},[]);
+  useEffect(()=>{if(!toast)return;const timer=setTimeout(()=>setToast(''),4500);return ()=>clearTimeout(timer);},[toast]);
+  useEffect(()=>{const key=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();setSearch(v=>!v);}if(e.key==='Escape'){setSelectedOrder(null);setMenu(false);setNotifications(false);}};window.addEventListener('keydown',key);return ()=>window.removeEventListener('keydown',key);},[]);
+  function navigate(p:Page){location.hash='/'+p;setPage(p);setMenu(false);}
+  function openCase(id:string){setSelectedCase(id);navigate('complaints');setSearch(false);setNotifications(false);}
+  function openOrder(id:string){setSelectedOrder(id);navigate('orders');setSearch(false);}
+  function updateCase(c:Complaint){setCases(prev=>prev.map(item=>item.id===c.id?c:item));}
+  if(auth)return <Auth onEnter={name=>{setUser(name);setAuth(false);navigate('overview');}}/>;
+  const resultOrders=seed.orders.filter(o=>`${o.id} ${o.customer}`.toLowerCase().includes(query.toLowerCase())); const resultCases=cases.filter(c=>`${c.id} ${c.customer} ${c.subject}`.toLowerCase().includes(query.toLowerCase()));
+  return <div className="app-shell"><a href="#main-content" className="skip-link">Skip to content</a>{menu&&<div className="mobile-overlay" onClick={()=>setMenu(false)}/>}
+    <aside className={`sidebar ${menu?'mobile-open':''}`}><a className="brand" href="#/overview"><span className="brand-symbol">r<span/></span>resolve<span className="brand-ai">AI</span></a><button className="workspace-switch" onClick={()=>navigate('settings')}><span className="store-monogram">S</span><span><strong>{settings.store}</strong><small>Store workspace</small></span><ChevronsUpDown size={15}/></button><div className="nav-label">WORKSPACE</div><nav>{nav.map(({id,label,icon:Icon})=><a key={id} href={'#/'+id} className={`nav-link ${page===id?'active':''}`} aria-current={page===id?'page':undefined}><Icon size={18} strokeWidth={1.7}/>{label}{id==='complaints'&&<span className="nav-count">{cases.filter(c=>c.status!=='Resolved').length}</span>}</a>)}</nav><div className="sidebar-bottom"><div className="workspace-status"><span className="live-dot"/><span>Sample workspace</span><button aria-label="About this workspace" className="icon-button" onClick={()=>setHelp(true)}><CircleHelp size={14}/></button></div><button className="help-link" onClick={()=>setHelp(true)}>A little help, when you need it<ArrowUpRight size={14}/></button><div className="profile"><Avatar name={user}/><span><strong>{user}</strong><small>Store owner</small></span><button className="icon-button" aria-label="Sign out" title="Sign out" onClick={()=>{location.hash='/login';setAuth(true);}}><LogOut size={16}/></button></div></div></aside>
+    <div className="app-main"><header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={()=>setMenu(true)}><Menu size={20}/></button><span>Workspace</span><ChevronRight size={13}/><strong>{nav.find(n=>n.id===page)?.label}</strong></div><div className="topbar-right"><button className="global-search" onClick={()=>setSearch(true)}><Search size={15}/><span>Search anything…</span><kbd>Ctrl K</kbd></button><span className="topbar-divider"/><div className="notification-wrap"><button className="icon-button bell-button" aria-label="Notifications" aria-expanded={notifications} onClick={()=>setNotifications(!notifications)}><Bell size={18}/><i/></button>{notifications&&<div className="notification-popover"><h3>Needs your attention</h3>{cases.filter(c=>c.urgency==='High'&&c.status!=='Resolved').map(c=><button key={c.id} onClick={()=>openCase(c.id)}><span className="notification-dot"/><span><strong>{c.subject}</strong><small>{c.customer} · {c.id}</small></span><ArrowUpRight size={14}/></button>)}<p>Based on your current complaint queue.</p></div>}</div><Avatar name={user} small/></div></header>
+    <main id="main-content" className={`main-content page-${page}`}>
+      {page==='overview'&&<Overview orders={seed.orders} cases={cases} navigate={navigate} openCase={openCase} openOrder={openOrder}/>}
+      {page==='orders'&&<Orders orders={seed.orders} selected={selectedOrder} onSelect={setSelectedOrder} onClose={()=>setSelectedOrder(null)}/>}
+      {page==='complaints'&&<Complaints cases={cases} orders={seed.orders} staff={staff} selected={selectedCase} onSelect={setSelectedCase} update={updateCase} notify={setToast}/>}
+      {page==='policies'&&<Policies policies={policies} setPolicies={setPolicies} notify={setToast}/>}
+      {page==='settings'&&<Settings settings={settings} setSettings={setSettings} staff={staff} setStaff={setStaff} notify={setToast}/>}
+      <footer className="page-footer"><span>Resolve AI <span className="footer-dot">·</span> Care, with context.</span><span>Sample data <span className="footer-dot">·</span> All times PKT</span></footer>
+    </main></div>
+    {toast&&<div className="toast" role="status"><Check size={17}/><span>{toast}</span><button aria-label="Dismiss notification" onClick={()=>setToast('')}><X size={15}/></button></div>}
+    {search&&<Modal title="Search workspace" onClose={()=>setSearch(false)}><div className="modal-body"><div className="search-field command-search"><Search size={18}/><input autoFocus aria-label="Search workspace" placeholder="Search a customer, order or complaint…" value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="search-results"><div className="section-label">COMPLAINTS</div>{resultCases.slice(0,4).map(c=><button key={c.id} onClick={()=>openCase(c.id)}><MessageSquare size={17}/><span><strong>{c.subject}</strong><small>{c.customer} · {c.id}</small></span><ArrowUpRight size={15}/></button>)}<div className="section-label">ORDERS</div>{resultOrders.slice(0,4).map(o=><button key={o.id} onClick={()=>openOrder(o.id)}><Package size={17}/><span><strong>Order #{o.id}</strong><small>{o.customer}</small></span><ArrowUpRight size={15}/></button>)}{!resultOrders.length&&!resultCases.length&&<p>No results for “{query}”.</p>}</div></div></Modal>}
+    {help&&<Modal title="Your Resolve workspace" onClose={()=>setHelp(false)}><div className="modal-body"><p>This is an interactive preview of Resolve AI. Explore order risk, review bilingual complaints, edit policy versions, and configure your team.</p><p>Changes are saved in this browser. All order data, AI scores and conversations are examples. Connections and outgoing messages are simulated.</p><p>To view account screens, use the sign-out button beside your profile.</p></div><div className="modal-actions"><button className="button primary" onClick={()=>setHelp(false)}>Got it</button></div></Modal>}
+  </div>;
+}
