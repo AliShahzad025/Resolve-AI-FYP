@@ -2,10 +2,14 @@
 
 The existing React + TypeScript frontend is in `frontend/`, copied from `D:\Resolve AI\FYP DL2\resolve-ui` with its design and interactions preserved.
 
-## Start the frontend
+## Stage 1: foundation
+
+The `backend/` folder contains the FastAPI service, PostgreSQL schema and Alembic migration for users, stores, memberships, and revocable sign-in sessions. Follow [backend/README.md](backend/README.md) to create the `resolveAi` database, configure `backend/.env`, run the migration, and start the API.
+
+Start the React app separately:
 
 ```powershell
-cd "D:\Resolve AI\Project\frontend"
+cd frontend
 npm install
 npm run dev
 ```
@@ -14,7 +18,7 @@ Open the address Vite prints. Run `npm run build` for the production build.
 
 ## Current implementation
 
-The UI includes account screens, analytics, orders and risk details, bilingual complaint handling, policy versions, and integration/team/routing settings. It currently uses fictional sample data and browser storage. Authentication, AI predictions, provider connections, and message delivery are simulated.
+The UI includes account screens, analytics, orders and risk details, bilingual complaint handling, policy versions, and integration/team/routing settings. Stage 1 wires registration, sign-in/out, initial store setup, and team membership to FastAPI/PostgreSQL. The other workspace features remain fictional previews and are scheduled for later stages.
 
 ## Implementation sequence
 
