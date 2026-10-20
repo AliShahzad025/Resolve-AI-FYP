@@ -5,7 +5,7 @@ export type Urgency = 'High' | 'Medium' | 'Low';
 export interface Order {
   id: string; customer: string; email: string; initials: string; city: string;
   date: string; amount: number; payment: string; outcome: string; courier: string;
-  score: number | null; history: number; priorRefunds: number; items: string;
+  score: number | null; history: number; priorRefunds: number; items: string; currency?: string; itemCount?: number;
 }
 export interface Message { id: string; body: string; incoming: boolean; time: string; }
 export interface Complaint {
