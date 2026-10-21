@@ -1,17 +1,18 @@
 export type Page = 'overview' | 'orders' | 'complaints' | 'policies' | 'settings';
 export type Tier = 'High' | 'Medium' | 'Low' | 'Unavailable';
-export type CaseStatus = 'Open' | 'In progress' | 'Escalated' | 'Resolved';
+export type CaseStatus = 'Open' | 'In progress' | 'Awaiting customer' | 'Escalated' | 'Resolved';
 export type Urgency = 'High' | 'Medium' | 'Low';
 export interface Order {
   id: string; customer: string; email: string; initials: string; city: string;
   date: string; amount: number; payment: string; outcome: string; courier: string;
   score: number | null; history: number; priorRefunds: number; items: string; currency?: string; itemCount?: number;
 }
-export interface Message { id: string; body: string; incoming: boolean; time: string; }
+export interface Message { id: string; body: string; incoming: boolean; time: string; sender?: string; deliveryStatus?: string; }
+export interface AuditEvent { id: string; action: string; summary: string; actor: string; time: string; }
 export interface Complaint {
-  id: string; customer: string; initials: string; subject: string; preview: string;
+  id: string; backendId?: string; customer: string; initials: string; subject: string; preview: string;
   category: string; urgency: Urgency; sentiment: string; confidence: number;
-  status: CaseStatus; assigned: string; orderId: string; language: string;
+  status: CaseStatus; assigned: string; orderId: string; language: string; audit?: AuditEvent[];
   updated: string; unread: boolean; takeover: boolean; messages: Message[]; draft: string;
 }
 export interface PolicyVersion { version: number; content: string; date: string; }

@@ -13,10 +13,12 @@ from app.models import AuthSession, Membership, Store, User
 from app.schemas import AuthOut, LoginRequest, MemberCreate, MemberOut, RegisterRequest, StoreOut
 from app.security import hash_password, issue_token, verify_password
 from app.shopify_routes import router as shopify_router
+from app.case_routes import router as case_router
 
 app = FastAPI(title="Resolve AI API", version="0.1.0")
 app.include_router(shopify_router)
-app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=["GET", "POST", "DELETE"], allow_headers=["Authorization", "Content-Type"])
+app.include_router(case_router)
+app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
 
 def auth_response(db: Session, user: User, membership: Membership, memberships: list[Membership] | None = None) -> AuthOut:

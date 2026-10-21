@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import Boolean, CHAR, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -140,3 +141,48 @@ class SourceEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     processing_status: Mapped[str] = mapped_column(PGEnum("pending", "processed", "failed", name="processing_status_t", create_type=False), nullable=False, server_default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+
+class ComplaintCase(Base):
+    __tablename__ = "complaint_cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_number: Mapped[int] = mapped_column(Integer)
+    case_ref: Mapped[str] = mapped_column(String)
+    store_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    assigned_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    status: Mapped[str] = mapped_column(String)
+    route: Mapped[str] = mapped_column(String)
+    routing_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    human_takeover: Mapped[bool] = mapped_column(Boolean)
+    category_override: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    urgency_override: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    provider_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    sender_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    direction: Mapped[str] = mapped_column(PGEnum("incoming", "outgoing", name="message_direction_t", create_type=False), nullable=False)
+    body: Mapped[str] = mapped_column(Text)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    delivery_status: Mapped[str] = mapped_column(PGEnum("received", "queued", "submitted", "delivered", "read", "failed", name="delivery_status_t", create_type=False), nullable=False)
+
+
+class AuditEntry(Base):
+    __tablename__ = "audit_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    store_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    entity_type: Mapped[str] = mapped_column(String(50))
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    action: Mapped[str] = mapped_column(String(100))
+    change_summary: Mapped[dict] = mapped_column(JSONB)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
