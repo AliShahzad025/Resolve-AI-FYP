@@ -175,6 +175,37 @@ class Message(Base):
     delivery_status: Mapped[str] = mapped_column(PGEnum("received", "queued", "submitted", "delivered", "read", "failed", name="delivery_status_t", create_type=False), nullable=False)
 
 
+class WhatsAppCredential(Base):
+    __tablename__ = "whatsapp_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, unique=True)
+    phone_number_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    waba_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    display_phone_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    verified_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    encrypted_access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_webhook_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class MessageOutbox(Base):
+    """Durable send queue for outgoing replies; one row per outgoing provider message."""
+    __tablename__ = "message_outbox"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, unique=True)
+    store_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False, server_default="whatsapp")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class AuditEntry(Base):
     __tablename__ = "audit_entries"
 

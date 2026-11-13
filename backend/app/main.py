@@ -1,3 +1,5 @@
+import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
@@ -14,10 +16,23 @@ from app.schemas import AuthOut, LoginRequest, MemberCreate, MemberOut, Register
 from app.security import hash_password, issue_token, verify_password
 from app.shopify_routes import router as shopify_router
 from app.case_routes import router as case_router
+from app.whatsapp_routes import router as whatsapp_router
+from app.whatsapp_service import start_worker, stop_worker
 
-app = FastAPI(title="Resolve AI API", version="0.1.0")
+logging.basicConfig(level=logging.INFO)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    start_worker()  # sends queued WhatsApp replies and retries failures
+    yield
+    stop_worker()
+
+
+app = FastAPI(title="Resolve AI API", version="0.1.0", lifespan=lifespan)
 app.include_router(shopify_router)
 app.include_router(case_router)
+app.include_router(whatsapp_router)
 app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
 

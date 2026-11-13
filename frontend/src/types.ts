@@ -7,13 +7,14 @@ export interface Order {
   date: string; amount: number; payment: string; outcome: string; courier: string;
   score: number | null; history: number; priorRefunds: number; items: string; currency?: string; itemCount?: number;
 }
-export interface Message { id: string; body: string; incoming: boolean; time: string; sender?: string; deliveryStatus?: string; }
+export interface Message { id: string; body: string; incoming: boolean; time: string; sender?: string; deliveryStatus?: string; deliveryError?: string | null; }
 export interface AuditEvent { id: string; action: string; summary: string; actor: string; time: string; }
 export interface Complaint {
   id: string; backendId?: string; customer: string; initials: string; subject: string; preview: string;
   category: string; urgency: Urgency; sentiment: string; confidence: number;
   status: CaseStatus; assigned: string; orderId: string; language: string; audit?: AuditEvent[];
   updated: string; unread: boolean; takeover: boolean; messages: Message[]; draft: string;
+  channel?: 'whatsapp' | 'manual'; phone?: string | null;
 }
 export interface PolicyVersion { version: number; content: string; date: string; }
 export interface Policy { id: string; title: string; description: string; activeVersion: number | null; versions: PolicyVersion[]; }

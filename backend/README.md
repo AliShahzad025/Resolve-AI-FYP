@@ -1,4 +1,4 @@
-# Resolve AI backend — Stages 1–2
+# Resolve AI backend — Stages 1–4
 
 FastAPI + SQLAlchemy + Alembic API for your existing PostgreSQL schema in database `ResolveAI`. Stage 1 implements account registration/sign-in/sign-out, owner store setup, store memberships, and owner-only member administration. Stage 2 implements manual case handling: store-scoped case lists, assignment, validated status transitions, staff replies, and append-only audit history. Shopify is tracked separately as Stage 4; its backend integration foundation exists, while live app authorization and end-to-end testing require provider credentials and a public HTTPS callback/webhook address.
 
@@ -137,6 +137,40 @@ All membership reads and writes are scoped to the store in the caller's session 
 - `POST /api/webhooks/shopify` verifies Shopify HMAC and idempotently processes order, refund, and uninstall events.
 
 Shopify API calls target the pinned stable `2026-10` GraphQL version. Webhook delivery requires a public HTTPS backend. No financial/return action is performed by this integration.
+
+## Stage 3 — WhatsApp connection
+
+Customers message the store's WhatsApp Business number; each message is verified, saved, and attached to that customer's open case (or opens a new one). Staff replies are queued, delivered through the Meta WhatsApp Cloud API, and their delivery status (sent → delivered → read, or failed) is tracked from Meta's callbacks.
+
+### How it works
+
+- **Incoming:** `POST /api/webhooks/whatsapp` checks the `X-Hub-Signature-256` HMAC with `WHATSAPP_APP_SECRET`, then saves a `source_events` row and the `messages` row in one transaction **before** returning 200. Meta's message ID (`wamid`) deduplicates repeated deliveries (`source_events` unique key + `ux_message_provider`). The customer is matched by phone number (a Shopify customer with the same phone is reused); a customer's next message joins their latest unresolved case, and an `Awaiting customer` case moves back to `In progress`.
+- **Outgoing:** `POST /api/cases/{id}/messages` saves the reply as `queued` and adds a `message_outbox` row in the same transaction. A background worker (started with the API) claims due jobs with `FOR UPDATE SKIP LOCKED`, sends them, stores the returned `wamid`, and marks the reply `submitted`. Temporary errors (network, 5xx, throttling) retry up to 5 times with backoff; permanent errors (e.g. the 24-hour customer service window, a recipient not on the test number's allowed list, an invalid token) mark the reply `failed` with a readable reason. Failed replies can be resent from the conversation.
+- **Delivery callbacks:** status webhooks update `messages.delivery_status` and only move it forward (a late `delivered` never overwrites `read`). Callbacks that arrive before the send call has saved the `wamid` are stored as pending events and applied right after.
+- **Audit:** case creation from WhatsApp, reopen-on-reply, delivery changes, failures, and resends are written to `audit_entries` (actor = System).
+- Cases for customers without a phone number (Stage 2 test cases) never call WhatsApp; their replies are saved only.
+
+The queue is PostgreSQL-backed rather than Redis so local development needs no extra service; the worker can run separately with `WHATSAPP_WORKER_ENABLED=false` on the API and `python -m app.whatsapp_service`.
+
+### Set up a Meta test number
+
+1. At [developers.facebook.com](https://developers.facebook.com/apps) create an app (type **Business**) and add the **WhatsApp** product. Meta creates a test business number.
+2. **WhatsApp → API Setup:** note the **Phone number ID** and **WhatsApp Business Account ID**, generate a temporary access token (valid 24 h; use a System User token for longer demos), and add your own phone under **To** as an allowed recipient.
+3. **App settings → Basic:** copy the **App secret** into `WHATSAPP_APP_SECRET` in `backend/.env`. `WHATSAPP_VERIFY_TOKEN` can be any random string. Run `python -m alembic upgrade head` and restart the backend.
+4. Start the ngrok tunnel. **WhatsApp → Configuration → Webhook:** callback URL `https://YOUR_PUBLIC_BACKEND/api/webhooks/whatsapp` (shown in Resolve Settings), verify token = `WHATSAPP_VERIFY_TOKEN`, then **Verify and save** and **subscribe to the `messages` field**.
+5. In Resolve: **Settings → Integrations → WhatsApp Business**, enter the phone number ID, WABA ID and token, and select **Connect WhatsApp** (the server validates them with Meta before saving them encrypted).
+6. Demo: send a WhatsApp message from your phone to the test number → the case appears in **Complaints** within a few seconds → reply with **Approve & send** → the message arrives on your phone and its status changes to Sent / Delivered / Read.
+
+WhatsApp only allows free-form replies within 24 hours of the customer's last message; outside that window Meta requires an approved template (not part of this stage), and the reply is marked failed with that reason.
+
+### Stage 3 API
+
+- `GET /api/whatsapp/status` — connection, webhook URL, configuration warnings, last webhook time, queue counts.
+- `POST /api/whatsapp/connect` (owner) — `{phone_number_id, access_token, waba_id?}`; validated against the Graph API, token stored Fernet-encrypted (`WHATSAPP_ENCRYPTION_KEY`, falling back to `SHOPIFY_ENCRYPTION_KEY`). One number can belong to only one store.
+- `DELETE /api/whatsapp/connect` (owner) — removes the credentials.
+- `GET /api/webhooks/whatsapp` — Meta's subscription challenge (`hub.verify_token`).
+- `POST /api/webhooks/whatsapp` — signed message and status webhooks.
+- `POST /api/cases/{case_id}/messages/{message_id}/retry` — resend a failed WhatsApp reply.
 
 ## Stage 2 manual case handling API
 

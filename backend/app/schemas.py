@@ -79,6 +79,7 @@ class CaseMessageOut(BaseModel):
     sender_name: str | None = None
     sent_at: str
     delivery_status: str
+    delivery_error: str | None = None
 
 
 class AuditOut(BaseModel):
@@ -108,5 +109,7 @@ class CaseOut(BaseModel):
     updated: str
     unread: bool
     takeover: bool
+    channel: str = "manual"
+    customer_phone: str | None = None
     messages: list[CaseMessageOut]
     audit: list[AuditOut]

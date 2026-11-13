@@ -1,14 +1,15 @@
 from datetime import datetime, timezone
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import Principal, current_principal
-from app.models import AuditEntry, ComplaintCase, Message
+from app.models import AuditEntry, ComplaintCase, Message, MessageOutbox
 from app.schemas import AuditOut, CaseCreate, CaseMessageOut, CaseOut, CaseUpdate, MessageCreate
+from app.whatsapp_service import MAX_TEXT_LENGTH, enqueue, process_outbox
 
 router = APIRouter()
 
@@ -45,7 +46,7 @@ def _require_case_access(principal: Principal, row):
 def _case_row(db: Session, case_id: uuid.UUID, store_id: uuid.UUID):
     row = db.execute(text("""
         SELECT c.*, COALESCE(cu.name, 'Unknown customer') AS customer_name,
-               cu.email, COALESCE(o.shopify_order_id, '') AS order_ref,
+               cu.email, cu.phone AS customer_phone, COALESCE(o.shopify_order_id, '') AS order_ref,
                COALESCE(au.name, 'Unassigned') AS assignee,
                COALESCE(a.category, 'General inquiry') AS category,
                COALESCE(a.urgency::text, 'medium') AS urgency,
@@ -77,14 +78,16 @@ def _case_row(db: Session, case_id: uuid.UUID, store_id: uuid.UUID):
 
 def _messages(db: Session, case_id: uuid.UUID) -> list[CaseMessageOut]:
     rows = db.execute(text("""
-        SELECT m.*, u.name AS sender_name
-        FROM messages m LEFT JOIN users u ON u.id = m.sender_user_id
+        SELECT m.*, u.name AS sender_name, ob.last_error AS delivery_error
+        FROM messages m
+        LEFT JOIN users u ON u.id = m.sender_user_id
+        LEFT JOIN message_outbox ob ON ob.message_id = m.id
         WHERE m.case_id = :case_id ORDER BY m.sent_at
     """), {"case_id": case_id}).mappings()
     return [CaseMessageOut(
         id=row["id"], body=row["body"], incoming=row["direction"] == "incoming",
         sender_name=row["sender_name"], sent_at=row["sent_at"].isoformat(),
-        delivery_status=row["delivery_status"],
+        delivery_status=row["delivery_status"], delivery_error=row["delivery_error"],
     ) for row in rows]
 
 
@@ -116,7 +119,9 @@ def _out(db: Session, row) -> CaseOut:
         confidence=round(float(row["confidence"]) * 100), status=DB_TO_STATUS.get(row["status"], row["status"]),
         assigned=row["assignee"], assigned_user_id=row["assigned_user_id"],
         order_id=row["order_ref"] or None, language="English", updated=last_activity.isoformat(),
-        unread=False, takeover=row["human_takeover"], messages=_messages(db, row["id"]),
+        unread=False, takeover=row["human_takeover"],
+        channel="whatsapp" if row["customer_phone"] else "manual", customer_phone=row["customer_phone"],
+        messages=_messages(db, row["id"]),
         audit=_audit(db, row["id"]),
     )
 
@@ -247,7 +252,7 @@ def update_case(case_id: uuid.UUID, body: CaseUpdate, principal: Principal = Dep
 
 
 @router.post("/api/cases/{case_id}/messages", response_model=CaseOut, status_code=201)
-def send_message(case_id: uuid.UUID, body: MessageCreate, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+def send_message(case_id: uuid.UUID, body: MessageCreate, background: BackgroundTasks, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
     case = _case_row(db, case_id, principal.membership.store_id)
     _require_case_access(principal, case)
     if case["status"] == "resolved":
@@ -255,12 +260,23 @@ def send_message(case_id: uuid.UUID, body: MessageCreate, principal: Principal =
     message_body = body.body.strip()
     if not message_body:
         raise HTTPException(status_code=422, detail="Reply cannot be blank")
+    via_whatsapp = bool(case["customer_phone"])
+    if via_whatsapp and len(message_body) > MAX_TEXT_LENGTH:
+        raise HTTPException(status_code=422, detail=f"WhatsApp replies are limited to {MAX_TEXT_LENGTH} characters")
     now = datetime.now(timezone.utc)
+    message_id = uuid.uuid4()
     db.add(Message(
-        id=uuid.uuid4(), case_id=case_id, sender_user_id=principal.user.id,
+        id=message_id, case_id=case_id, sender_user_id=principal.user.id,
         direction="outgoing", body=message_body, sent_at=now, delivery_status="queued",
     ))
-    _record(db, principal, case_id, "reply_sent", {"body": message_body, "delivery_status": "queued"})
+    db.flush()
+    if via_whatsapp:
+        # Durable queue: the reply is sent by the worker even if this request ends first.
+        enqueue(db, principal.membership.store_id, message_id)
+        background.add_task(process_outbox)
+    _record(db, principal, case_id, "reply_sent", {
+        "body": message_body, "channel": "WhatsApp" if via_whatsapp else "Test case (not sent)", "delivery_status": "queued",
+    })
     if case["status"] == "open":
         db.execute(
             text("UPDATE complaint_cases SET status = 'in_progress'::case_status_t WHERE id = :id"),
@@ -268,4 +284,31 @@ def send_message(case_id: uuid.UUID, body: MessageCreate, principal: Principal =
         )
         _record(db, principal, case_id, "status_changed", {"from": "Open", "to": "In progress"})
     db.commit()
+    return _out(db, _case_row(db, case_id, principal.membership.store_id))
+
+
+@router.post("/api/cases/{case_id}/messages/{message_id}/retry", response_model=CaseOut)
+def retry_message(case_id: uuid.UUID, message_id: uuid.UUID, background: BackgroundTasks, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    case = _case_row(db, case_id, principal.membership.store_id)
+    _require_case_access(principal, case)
+    if case["status"] == "resolved":
+        raise HTTPException(status_code=409, detail="Reopen the case before resending a reply")
+    message = db.scalar(select(Message).where(Message.id == message_id, Message.case_id == case_id).with_for_update())
+    if not message or message.direction != "outgoing":
+        raise HTTPException(status_code=404, detail="Reply not found")
+    if message.delivery_status != "failed":
+        raise HTTPException(status_code=409, detail="Only failed replies can be resent")
+    job = db.scalar(select(MessageOutbox).where(MessageOutbox.message_id == message_id).with_for_update())
+    if not job:
+        raise HTTPException(status_code=409, detail="This reply was not sent through WhatsApp")
+    message.delivery_status = "queued"
+    message.provider_message_id = None
+    job.completed_at = None
+    job.attempts = 0
+    job.last_error = None
+    job.locked_until = None
+    job.next_attempt_at = datetime.now(timezone.utc)
+    _record(db, principal, case_id, "reply_retried", {"delivery_status": "queued"})
+    db.commit()
+    background.add_task(process_outbox)
     return _out(db, _case_row(db, case_id, principal.membership.store_id))
