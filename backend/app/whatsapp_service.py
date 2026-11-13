@@ -39,6 +39,7 @@ LOCK_SECONDS = 60
 # Meta "status" values -> delivery_status_t. Higher rank wins; statuses can arrive out of order.
 STATUS_MAP = {"sent": "submitted", "delivered": "delivered", "read": "read", "failed": "failed"}
 STATUS_RANK = {"received": 0, "queued": 0, "submitted": 1, "failed": 2, "delivered": 3, "read": 4}
+SUBSCRIBE_WARNING = "Connected, but subscribing the app to the business account failed"
 STATUS_LABEL = {"queued": "Queued", "submitted": "Sent", "delivered": "Delivered", "read": "Read", "failed": "Failed"}
 
 # Graph API error codes worth retrying (throttling / temporary service problems).
@@ -241,6 +242,8 @@ def process_webhook_payload(payload: dict) -> dict:
                     summary["ignored"] += 1
                     continue
                 credential.last_webhook_at = utcnow()
+                if credential.last_error and credential.last_error.startswith(SUBSCRIBE_WARNING):
+                    credential.last_error = None  # a delivered webhook proves the subscription works
                 store = db.get(Store, credential.store_id)
                 contacts = {str(c.get("wa_id")): ((c.get("profile") or {}).get("name")) for c in value.get("contacts") or [] if isinstance(c, dict)}
                 for message in value.get("messages") or []:

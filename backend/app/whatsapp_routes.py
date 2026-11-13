@@ -13,6 +13,7 @@ from app.database import get_db
 from app.dependencies import Principal, current_principal, require_owner
 from app.models import Store, WhatsAppCredential
 from app.whatsapp_service import (
+    SUBSCRIBE_WARNING,
     WhatsAppError,
     encrypt_token,
     fetch_phone_number,
@@ -91,11 +92,16 @@ def whatsapp_connect(body: WhatsAppConnectRequest, principal: Principal = Depend
     store.whatsapp_token_ref = str(credential.id)
     warning = None
     if waba_id:
-        try:
-            subscribe_app_to_waba(waba_id, token)
-        except WhatsAppError as err:
-            warning = f"Connected, but subscribing the app to the business account failed: {err.message}"
-            credential.last_error = warning
+        for attempt in range(2):  # one quick retry for temporary network hiccups
+            try:
+                subscribe_app_to_waba(waba_id, token)
+                break
+            except WhatsAppError as err:
+                if attempt == 0 and err.retryable:
+                    continue
+                warning = f"{SUBSCRIBE_WARNING}: {err.message}. If customer messages still arrive, you can ignore this."
+                credential.last_error = warning
+                break
     db.commit()
     return {**_status(db, store.id), "warning": warning}
 
