@@ -35,6 +35,14 @@ class ShopifyConnectRequest(BaseModel):
     shop_domain: str
 
 
+SHOP_TAKEN_MESSAGE = "This Shopify store is already connected to another Resolve AI account. Ask its owner to invite you as a team member instead."
+
+
+def _shop_owned_by_other_store(db: Session, shop: str, store_id) -> bool:
+    """A Shopify shop may belong to only one Resolve AI store (stores.shopify_domain is unique)."""
+    return db.scalar(select(Store.id).where(Store.shopify_domain == shop, Store.id != store_id)) is not None
+
+
 @router.get("/api/shopify/status")
 def shopify_status(principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
     store = principal.membership.store
@@ -62,6 +70,8 @@ def shopify_connect(body: ShopifyConnectRequest, principal: Principal = Depends(
     existing_credential = db.scalar(select(ShopifyCredential.id).where(ShopifyCredential.store_id == store.id))
     if existing_credential and store.shopify_domain and store.shopify_domain != shop:
         raise HTTPException(status_code=409, detail="Disconnect the currently connected Shopify store first")
+    if _shop_owned_by_other_store(db, shop, store.id):
+        raise HTTPException(status_code=409, detail=SHOP_TAKEN_MESSAGE)
     state = secrets.token_urlsafe(32)
     db.add(ShopifyOAuthState(state=state, store_id=store.id, user_id=principal.user.id, shop_domain=shop, expires_at=datetime.now(timezone.utc) + timedelta(minutes=10)))
     db.commit()
@@ -113,6 +123,10 @@ def shopify_callback(request: Request, db: Session = Depends(get_db)):
     store = db.scalar(select(Store).where(Store.id == state.store_id).with_for_update())
     if not store:
         raise HTTPException(status_code=400, detail="Store no longer exists")
+    if _shop_owned_by_other_store(db, shop, store.id):
+        db.delete(state)
+        db.commit()
+        return RedirectResponse(settings.frontend_base_url + "/#/settings?shopify=already_connected", status_code=303)
     try:
         token = exchange_code(shop, query.get("code", ""))
     except HTTPException:

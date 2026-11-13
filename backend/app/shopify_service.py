@@ -154,6 +154,8 @@ def graphql(db: Session, store: Store, query: str, variables: dict | None = None
             for error in errors if isinstance(error, dict) and isinstance(error.get("path"), list)
         })
         logger.error("Shopify GraphQL request rejected: codes=%s paths=%s", codes, paths)
+        if "ACCESS_DENIED" in codes:
+            raise HTTPException(status_code=502, detail="Shopify denied access to orders. Request Protected customer data access for the app in the Shopify dashboard, then reconnect.")
         raise HTTPException(status_code=502, detail="Shopify rejected the Admin API request; check app scopes and protected customer data access")
     return result.get("data", {})
 
@@ -171,7 +173,8 @@ def register_webhooks(db: Session, store: Store, credential: ShopifyCredential) 
             data = graphql(db, store, WEBHOOK_CREATE_MUTATION, {"topic": topic, "webhookSubscription": {"uri": f"{base}/api/webhooks/shopify"}})
             errors = data.get("webhookSubscriptionCreate", {}).get("userErrors", [])
             if errors:
-                return False, f"Could not register {topic} webhook; check the Shopify app scopes and webhook configuration"
+                reason = "; ".join(str(error.get("message", "")) for error in errors if error.get("message"))
+                return False, f"Could not register {topic} webhook: {reason or 'check the Shopify app scopes and webhook configuration'}"
         return True, None
     except HTTPException as exc:
         return False, str(exc.detail)
