@@ -118,16 +118,26 @@ def verify_webhook_hmac(raw_body: bytes, received: str | None) -> bool:
     return hmac.compare_digest(digest, received)
 
 
-def _refresh_if_needed(db: Session, credential: ShopifyCredential) -> dict:
+def _refresh_if_needed(db: Session, credential: ShopifyCredential, shop_domain: str) -> dict:
     bundle = decrypt_bundle(credential.encrypted_token_bundle)
     if not bundle.get("refresh_token") or int(bundle.get("expires_at", 0)) > int(time.time()) + 300:
         return bundle
     if not settings.shopify_api_key or not settings.shopify_api_secret:
         raise HTTPException(status_code=503, detail="Shopify app credentials are not configured on the server")
     form = urlencode({"client_id": settings.shopify_api_key, "client_secret": settings.shopify_api_secret, "grant_type": "refresh_token", "refresh_token": bundle["refresh_token"]}).encode()
-    refreshed = _request(f"https://{credential.store.shopify_domain}/admin/oauth/access_token", method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"}, data=form)
+    try:
+        refreshed = _request(f"https://{shop_domain}/admin/oauth/access_token", method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"}, data=form)
+    except HTTPException:
+        raise HTTPException(status_code=502, detail="Shopify access expired and could not be renewed. Disconnect and connect Shopify again.")
+    if not refreshed.get("access_token"):
+        raise HTTPException(status_code=502, detail="Shopify did not return a renewed access token. Disconnect and connect Shopify again.")
     now = int(time.time())
-    bundle = {**refreshed, "expires_at": now + int(refreshed.get("expires_in", 3600)), "refresh_token_expires_at": now + int(refreshed.get("refresh_token_expires_in", 7776000))}
+    bundle = {
+        **refreshed,
+        "refresh_token": refreshed.get("refresh_token") or bundle["refresh_token"],
+        "expires_at": now + int(refreshed.get("expires_in", 3600)),
+        "refresh_token_expires_at": now + int(refreshed.get("refresh_token_expires_in", 7776000)),
+    }
     credential.encrypted_token_bundle = encrypt_bundle(bundle)
     db.commit()
     return bundle
@@ -137,7 +147,7 @@ def graphql(db: Session, store: Store, query: str, variables: dict | None = None
     credential = db.scalar(select(ShopifyCredential).where(ShopifyCredential.store_id == store.id).with_for_update())
     if not credential:
         raise HTTPException(status_code=409, detail="Shopify is not connected for this store")
-    bundle = _refresh_if_needed(db, credential)
+    bundle = _refresh_if_needed(db, credential, store.shopify_domain)
     api_url = f"https://{store.shopify_domain}/admin/api/{settings.shopify_api_version}/graphql.json"
     body = json.dumps({"query": query, "variables": variables or {}}).encode()
     result = _request(api_url, method="POST", headers={"Content-Type": "application/json", "X-Shopify-Access-Token": bundle["access_token"]}, data=body)
