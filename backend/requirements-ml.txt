@@ -1,0 +1,11 @@
+# Optional: complaint classifier (Stage 5). The API runs without these; cases then show "Unclassified".
+# CPU-only torch (much smaller than the GPU build):
+#   python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   python -m pip install -r requirements-ml.txt
+transformers>=4.46
+safetensors
+sentencepiece
+# Policy search (RAG): vector store client. Then run: python scripts/download_embedding_model.py
+qdrant-client>=1.12
+# Only needed when DRAFT_PROVIDER=anthropic (Groq / xAI / OpenAI-compatible providers need no extra package)
+anthropic>=1.0

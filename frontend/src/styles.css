@@ -27,4 +27,25 @@ td small,.metric-detail,.page-heading p,.panel-heading p,.footnote,.page-footer,
 .webhook-setup{display:flex;flex-direction:column;gap:6px;margin:16px 0 4px;padding:12px 14px;border:1px dashed #d6dfd1;border-radius:8px;background:#f8faf6;font-size:11px;color:#6f7d69}
 .webhook-setup small{font-size:10px;line-height:1.6;color:#859180}.webhook-setup code{font-size:10px;padding:1px 4px;border-radius:3px;background:#eef2eb;color:#3d5236}
 .copy-row{display:flex;gap:8px;align-items:center}.copy-row input{flex:1;min-width:0;font-size:11px}
+/* Stage 5: policy library, retrieval and suggested replies */
+.draft-heading{align-items:center;gap:10px}.draft-actions{display:flex;gap:12px}.draft-actions .text-button{font-size:10px;gap:4px}
+.draft-banner{display:flex;gap:6px;align-items:flex-start;margin:0 0 9px;padding:7px 9px;border-radius:6px;background:#f4f7ef;color:#64755a;font-size:10px;line-height:1.5}
+.draft-banner.warn{background:#fbf1ec;color:#9a5f45}.draft-banner svg{flex:none;margin-top:1px}
+.evidence-card p{font-size:10px;line-height:1.6;color:#66775b;margin-top:7px}.evidence-card.unused{opacity:.6}
+.evidence-score{margin-left:8px}.evidence-empty{font-size:10px;line-height:1.6;margin:12px 0 0}
+.routing-reason{font-size:10px;line-height:1.5;color:#7a8a70;background:#f6f9f2;border-radius:6px;padding:7px 9px;margin:0 0 10px}
+.policy-notice{display:flex;gap:8px;align-items:flex-start;margin:0 0 16px;padding:10px 13px;border-radius:8px;background:#fbf1ec;color:#9a5f45;font-size:11px;line-height:1.5}
+.policy-empty{margin:14px 8px;font-size:11px;line-height:1.6;color:#7a8a70}.policy-empty .button{margin-top:10px}
+.policy-editor-footer>span{display:flex;align-items:center;gap:7px}.policy-editor-footer .text-button{font-size:10px;gap:4px}
+.retrieval-test{margin-top:22px;padding-bottom:20px}.retrieval-test .panel-heading{flex-wrap:wrap}.retrieval-test .panel-heading .muted{font-size:10px}
+.retrieval-form{display:flex;gap:10px;padding:14px 23px 0}.retrieval-form .search-field{flex:1}
+.retrieval-results{padding:2px 23px 0;display:grid;gap:0}.retrieval-results .evidence-card>div span{margin-left:8px}
+.retrieval-message{display:flex;gap:7px;align-items:flex-start;margin:14px 23px 0;font-size:11px;line-height:1.5;color:#8a7a62}
+@media (max-width:640px){.retrieval-form{flex-direction:column}}
+/* Stage 5: complaint analysis */
+.analysis-list dd{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:nowrap;white-space:nowrap}
+.analysis-list dd .conf{font-size:9px;color:#8b9984;font-weight:400}.analysis-list dd .conf.low{color:#ad795d;font-weight:600}
+.analysis-warning{display:flex;gap:6px;align-items:flex-start;margin:10px 0 0;padding:7px 9px;border-radius:6px;background:#fbf1ec;color:#9a5f45;font-size:10px;line-height:1.5}
+.analysis-model{margin:8px 0 0;font-size:9px;color:#9aa592;word-break:break-all}.analysis-empty{font-size:10px;line-height:1.6;margin:0}
+.analysis-rerun{margin-top:10px;font-size:10px;gap:5px}
 .form-grid .wide-field{grid-column:1/-1}.form-grid label small{font-weight:400;color:#8b9984}

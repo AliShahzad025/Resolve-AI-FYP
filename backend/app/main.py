@@ -18,6 +18,9 @@ from app.shopify_routes import router as shopify_router
 from app.case_routes import router as case_router
 from app.whatsapp_routes import router as whatsapp_router
 from app.whatsapp_service import start_worker, stop_worker
+from app.classifier import start_classifier, stop_classifier
+from app.policy_routes import router as policy_router
+from app import drafting, rag
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,7 +28,12 @@ logging.basicConfig(level=logging.INFO)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     start_worker()  # sends queued WhatsApp replies and retries failures
+    start_classifier()  # loads complaint models in the background, then labels new messages
+    rag.register_periodic(drafting.auto_draft_pending)  # drafts replies for new complaints when a provider is configured
+    rag.start_indexer()  # indexes saved policy versions into Qdrant
     yield
+    rag.stop_indexer()
+    stop_classifier()
     stop_worker()
 
 
@@ -33,6 +41,7 @@ app = FastAPI(title="Resolve AI API", version="0.1.0", lifespan=lifespan)
 app.include_router(shopify_router)
 app.include_router(case_router)
 app.include_router(whatsapp_router)
+app.include_router(policy_router)
 app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
 

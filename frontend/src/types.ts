@@ -8,6 +8,8 @@ export interface Order {
   score: number | null; history: number; priorRefunds: number; items: string; currency?: string; itemCount?: number;
 }
 export interface Message { id: string; body: string; incoming: boolean; time: string; sender?: string; deliveryStatus?: string; deliveryError?: string | null; }
+export interface Evidence { chunk_id: string; title: string; version: number; text: string; score: number | null; used: boolean; }
+export interface DraftInfo { state: string; message: string; evidence: Evidence[]; }
 export interface AuditEvent { id: string; action: string; summary: string; actor: string; time: string; }
 export interface Complaint {
   id: string; backendId?: string; customer: string; initials: string; subject: string; preview: string;
@@ -15,6 +17,9 @@ export interface Complaint {
   status: CaseStatus; assigned: string; orderId: string; language: string; audit?: AuditEvent[];
   updated: string; unread: boolean; takeover: boolean; messages: Message[]; draft: string;
   channel?: 'whatsapp' | 'manual'; phone?: string | null;
+  analysed?: boolean; analysisConfidence?: Record<string, number>; modelVersions?: Record<string, string>;
+  routingReason?: string | null;
+  suggestion?: { id: string; text: string; model: string; supported: boolean; note: string | null; stale: boolean; evidence: Evidence[] } | null;
 }
 export interface PolicyVersion { version: number; content: string; date: string; }
 export interface Policy { id: string; title: string; description: string; activeVersion: number | null; versions: PolicyVersion[]; }

@@ -172,6 +172,71 @@ WhatsApp only allows free-form replies within 24 hours of the customer's last me
 - `POST /api/webhooks/whatsapp` — signed message and status webhooks.
 - `POST /api/cases/{case_id}/messages/{message_id}/retry` — resend a failed WhatsApp reply.
 
+## Stage 5 — Complaint AI and policy
+
+Each incoming complaint is labelled, matched against the store's own policy, and given an editable draft reply with the supporting policy passages. Staff approve every reply; nothing is sent automatically in this stage.
+
+### 1. Complaint analysis
+
+Fine-tuned `xlm-roberta-base` models (category, urgency, sentiment) are trained with `ml/finetune_complaint_classifier.ipynb` and loaded from `backend/models/{category,urgency,sentiment}` (`app/classifier.py`). Labels, per-label confidence, detected language and model versions are stored in `complaint_analyses`. Greetings and media-only messages are not classified. Missing models never block intake or replies: cases show "Unclassified".
+
+Install once: follow `requirements-ml.txt` (CPU-only torch). The model folders are not in Git; copy them from the team drive.
+
+### 2. Policy library
+
+Policies are versioned per store in `policy_documents`. Saving always creates a new version; one version per policy can be active (`ux_policy_one_active`), and only an indexed version can be activated (`ck_policy_active_ready`). Owners and managers edit; agents read.
+
+### 3. Policy retrieval (Qdrant)
+
+A saved version is queued (`index_status = pending`), split into passages that keep their section heading (`policy_chunks`), embedded with `intfloat/multilingual-e5-small`, and stored in Qdrant with `store_id` / `document_id` payloads. Search filters on the store and its **active, ready** versions only and returns the top 3 passages scoring at least `RAG_MIN_SCORE` (0.80).
+
+The embedding model alone matches Roman Urdu to English policy text poorly, so the query is expanded twice (`rag.compose_query`): a Roman Urdu → English keyword glossary applied to the customer's own words, and an English hint for the classifier's category. Measured on 14 complaints (mostly Roman Urdu) against the starter policies:
+
+| Query | Top-1 correct | Correct passage in top 3 |
+|---|---|---|
+| Message only | 6/14 | 10/14 |
+| + category hint (correct category) | 13/14 | 14/14 |
+| + category hint (wrong category), no glossary | 2/14 | 9/14 |
+| + glossary, no category | 11/14 | 14/14 |
+| + glossary + correct category | 13/14 | 14/14 |
+| + glossary + wrong category | 9/14 | 13/14 |
+
+E5 similarity scores are compressed (unrelated questions still score about 0.80), so the score only removes clear non-matches. The drafting model receives the top passages and decides whether they answer the customer (`supported`); if not, only a holding reply is drafted.
+
+Qdrant runs embedded in `backend/qdrant_data` (no server). Set `QDRANT_URL` to use a Qdrant server. If the folder is lost, vectors are rebuilt at startup from `policy_documents`.
+
+```powershell
+python -m pip install -r requirements-ml.txt
+python scripts/download_embedding_model.py   # ~490 MB into backend/models/embedding
+```
+
+### 4. Draft replies with evidence
+
+`app/drafting.py`: for the latest complaint message the service retrieves evidence and, only when evidence exists, asks a language model for a reply grounded in the numbered passages, in the customer's language (English, Roman Urdu or mixed). The model returns JSON: `reply`, `supported`, `used_passages`, `note_for_agent`.
+
+| Situation | Result |
+|---|---|
+| No active policy / no passage above the minimum score | No draft; `routing_reason` says staff must answer |
+| Evidence found, model says the passages cover the request | Draft + the passages it used (`response_suggestions`, `pending_review`) |
+| Evidence found, model says they do not cover it | A holding reply that states no policy, flagged for a staff decision |
+| Provider not configured or failing | No draft; the matching passages are still shown |
+
+Sending a reply marks the pending draft `approved` and records in the audit trail whether it was sent as drafted or edited. Dismissing marks it `rejected`; a newer draft marks older ones `expired`. Drafts are generated automatically for new complaints (`DRAFT_AUTO`, last 24 hours, not for resolved or human-takeover cases) and on demand with **Suggest reply**.
+
+Configure a provider in `.env` (`DRAFT_PROVIDER`, `DRAFT_API_KEY`, `DRAFT_MODEL`): `groq`, `xai`, any `openai_compatible` chat-completions API, or `anthropic`. Complaint text and the retrieved passages are sent to that provider.
+
+### Stage 5 API
+
+- `GET /api/policies` — policies with versions, index status and retrieval health.
+- `POST /api/policies` `{title, content}` — create a policy or save a new version (owner/manager).
+- `POST /api/policies/starter` — add editable starter policies (not activated).
+- `POST /api/policies/{version_id}/activate | deactivate | reindex`.
+- `POST /api/policies/search` `{query}` — passages the assistant would use for a customer question.
+- `POST /api/cases/{case_id}/analyse` — re-run the classifier on the latest complaint message.
+- `POST /api/cases/{case_id}/draft` — retrieve evidence and draft a reply; returns `state`, `evidence`, `case`.
+- `POST /api/cases/{case_id}/draft/dismiss`.
+- `GET /api/classifier/status`, `GET /api/drafting/status`.
+
 ## Stage 2 manual case handling API
 
 - `GET /api/cases` returns cases scoped to the active store. Owners and managers see all cases; agents see only cases assigned to them.

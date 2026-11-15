@@ -90,6 +90,26 @@ class AuditOut(BaseModel):
     occurred_at: str
 
 
+class EvidenceOut(BaseModel):
+    chunk_id: str
+    title: str
+    version: int
+    text: str
+    score: float | None = None
+    used: bool = True
+
+
+class SuggestionOut(BaseModel):
+    id: uuid.UUID
+    text: str
+    model: str
+    supported: bool
+    note: str | None = None
+    created_at: str
+    stale: bool = False          # the customer has written again since this draft was made
+    evidence: list[EvidenceOut] = Field(default_factory=list)
+
+
 class CaseOut(BaseModel):
     id: uuid.UUID
     case_ref: str
@@ -111,5 +131,10 @@ class CaseOut(BaseModel):
     takeover: bool
     channel: str = "manual"
     customer_phone: str | None = None
+    analysed: bool = False
+    analysis_confidence: dict[str, int] = Field(default_factory=dict)
+    model_versions: dict[str, str] = Field(default_factory=dict)
+    routing_reason: str | None = None
+    suggestion: SuggestionOut | None = None
     messages: list[CaseMessageOut]
     audit: list[AuditOut]

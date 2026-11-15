@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import Principal, current_principal
 from app.models import AuditEntry, ComplaintCase, Message, MessageOutbox
-from app.schemas import AuditOut, CaseCreate, CaseMessageOut, CaseOut, CaseUpdate, MessageCreate
+from app.schemas import AuditOut, CaseCreate, CaseMessageOut, CaseOut, CaseUpdate, EvidenceOut, MessageCreate, SuggestionOut
 from app.whatsapp_service import MAX_TEXT_LENGTH, enqueue, process_outbox
+from app.classifier import LANGUAGE_LABEL, analysable_text, analyse_message, classifier
+from app import drafting
 
 router = APIRouter()
 
@@ -48,17 +50,19 @@ def _case_row(db: Session, case_id: uuid.UUID, store_id: uuid.UUID):
         SELECT c.*, COALESCE(cu.name, 'Unknown customer') AS customer_name,
                cu.email, cu.phone AS customer_phone, COALESCE(o.shopify_order_id, '') AS order_ref,
                COALESCE(au.name, 'Unassigned') AS assignee,
-               COALESCE(a.category, 'General inquiry') AS category,
+               COALESCE(a.category, 'unclassified') AS category,
                COALESCE(a.urgency::text, 'medium') AS urgency,
                COALESCE(a.sentiment::text, 'neutral') AS sentiment,
                COALESCE((a.confidence->>'category')::numeric, 0.0) AS confidence,
+               a.confidence AS confidence_all, a.model_versions, a.language AS analysis_language,
+               a.category IS NOT NULL AS analysed,
                COALESCE(last_incoming.body, '') AS latest_message
         FROM complaint_cases c
         LEFT JOIN customers cu ON cu.id = c.customer_id AND cu.store_id = c.store_id
         LEFT JOIN orders o ON o.id = c.order_id AND o.store_id = c.store_id
         LEFT JOIN users au ON au.id = c.assigned_user_id
         LEFT JOIN LATERAL (
-          SELECT ca.category, ca.urgency, ca.sentiment, ca.confidence
+          SELECT ca.category, ca.urgency, ca.sentiment, ca.confidence, ca.model_versions, ca.language
           FROM complaint_analyses ca
           JOIN messages m ON m.id = ca.message_id
           WHERE m.case_id = c.id
@@ -104,6 +108,35 @@ def _audit(db: Session, case_id: uuid.UUID) -> list[AuditOut]:
     ) for row in rows]
 
 
+def _suggestion(db: Session, case_id: uuid.UUID) -> SuggestionOut | None:
+    """The draft awaiting staff review for this case, with the policy passages it was grounded in."""
+    row = db.execute(text("""
+        SELECT id, draft_text, generation_model, supported, note, created_at, evidence_chunk_ids, retrieval, message_id
+        FROM response_suggestions WHERE case_id = :case_id AND status = 'pending_review'
+        ORDER BY created_at DESC LIMIT 1
+    """), {"case_id": case_id}).mappings().first()
+    if not row:
+        return None
+    retrieved = [r for r in (row["retrieval"] or []) if isinstance(r, dict) and r.get("chunk_id")]
+    scores = {r["chunk_id"]: r.get("score") for r in retrieved}
+    used_ids = [str(i) for i in (row["evidence_chunk_ids"] or [])]
+    all_ids = list(dict.fromkeys(used_ids + list(scores)))
+    evidence: list[EvidenceOut] = []
+    if all_ids:
+        chunks = {str(c["id"]): c for c in db.execute(text("""
+            SELECT c.id, c.content, d.title, d.version FROM policy_chunks c
+            JOIN policy_documents d ON d.id = c.document_id WHERE c.id = ANY(CAST(:ids AS uuid[]))
+        """), {"ids": all_ids}).mappings()}
+        evidence = [EvidenceOut(chunk_id=i, title=chunks[i]["title"], version=chunks[i]["version"], text=chunks[i]["content"],
+                                score=scores.get(i), used=i in used_ids) for i in all_ids if i in chunks]
+    latest = drafting.latest_complaint_message(db, case_id)
+    return SuggestionOut(
+        id=row["id"], text=row["draft_text"], model=row["generation_model"], supported=row["supported"], note=row["note"],
+        created_at=row["created_at"].isoformat(), stale=bool(latest and row["message_id"] and latest.id != row["message_id"]),
+        evidence=evidence,
+    )
+
+
 def _out(db: Session, row) -> CaseOut:
     last_activity = db.execute(text("""
         SELECT GREATEST(
@@ -118,8 +151,12 @@ def _out(db: Session, row) -> CaseOut:
         urgency=row["urgency"].title(), sentiment=row["sentiment"].title(),
         confidence=round(float(row["confidence"]) * 100), status=DB_TO_STATUS.get(row["status"], row["status"]),
         assigned=row["assignee"], assigned_user_id=row["assigned_user_id"],
-        order_id=row["order_ref"] or None, language="English", updated=last_activity.isoformat(),
-        unread=False, takeover=row["human_takeover"],
+        order_id=row["order_ref"] or None, language=LANGUAGE_LABEL.get(row["analysis_language"] or "", "English"),
+        updated=last_activity.isoformat(), unread=False, takeover=row["human_takeover"],
+        analysed=bool(row["analysed"]),
+        analysis_confidence={k: round(float(v) * 100) for k, v in (row["confidence_all"] or {}).items() if isinstance(v, (int, float))},
+        model_versions={k: str(v) for k, v in (row["model_versions"] or {}).items()},
+        routing_reason=row["routing_reason"], suggestion=_suggestion(db, row["id"]),
         channel="whatsapp" if row["customer_phone"] else "manual", customer_phone=row["customer_phone"],
         messages=_messages(db, row["id"]),
         audit=_audit(db, row["id"]),
@@ -173,15 +210,23 @@ def create_case(body: CaseCreate, principal: Principal = Depends(current_princip
         VALUES (:id, :case_id, CAST('incoming' AS message_direction_t), :body, :sent_at,
                 CAST('received' AS delivery_status_t))
     """), {"id": message_id, "case_id": case_id, "body": body.body.strip(), "sent_at": now})
-    urgency = body.urgency.lower()
-    db.execute(text("""
-        INSERT INTO complaint_analyses
-          (id, message_id, category, urgency, sentiment, confidence, model_versions, analysed_at)
-        VALUES (:id, :message_id, :category, CAST(:urgency AS urgency_t), 'neutral', :confidence, '{}'::jsonb, :analysed_at)
-    """), {
-        "id": uuid.uuid4(), "message_id": message_id, "category": body.category.strip().lower().replace(" ", "_"),
-        "urgency": urgency, "confidence": '{"category": 0.5, "urgency": 0.5}', "analysed_at": now,
-    })
+    # Label the test message with the real classifier when it is loaded; the form's category/urgency are only
+    # a fallback (stored at 50% confidence) for when the models are unavailable.
+    analysed = False
+    if classifier.state == "ready":
+        try:
+            analysed = analyse_message(db, message_id, body.body.strip()) is not None
+        except Exception:
+            analysed = False
+    if not analysed:
+        db.execute(text("""
+            INSERT INTO complaint_analyses
+              (id, message_id, category, urgency, sentiment, confidence, model_versions, analysed_at)
+            VALUES (:id, :message_id, :category, CAST(:urgency AS urgency_t), 'neutral', :confidence, '{}'::jsonb, :analysed_at)
+        """), {
+            "id": uuid.uuid4(), "message_id": message_id, "category": body.category.strip().lower().replace(" ", "_"),
+            "urgency": body.urgency.lower(), "confidence": '{"category": 0.5, "urgency": 0.5}', "analysed_at": now,
+        })
     db.add(AuditEntry(
         id=uuid.uuid4(), store_id=store_id, actor_user_id=principal.user.id,
         entity_type="case", entity_id=case_id, action="case_created",
@@ -274,9 +319,18 @@ def send_message(case_id: uuid.UUID, body: MessageCreate, background: Background
         # Durable queue: the reply is sent by the worker even if this request ends first.
         enqueue(db, principal.membership.store_id, message_id)
         background.add_task(process_outbox)
-    _record(db, principal, case_id, "reply_sent", {
-        "body": message_body, "channel": "WhatsApp" if via_whatsapp else "Test case (not sent)", "delivery_status": "queued",
-    })
+    # A reply closes the review of any pending AI draft; record whether staff used it as written or edited it.
+    pending = db.execute(text("""
+        SELECT id, draft_text FROM response_suggestions WHERE case_id = :case_id AND status = 'pending_review'
+        ORDER BY created_at DESC LIMIT 1
+    """), {"case_id": case_id}).first()
+    summary = {"body": message_body, "channel": "WhatsApp" if via_whatsapp else "Test case (not sent)", "delivery_status": "queued"}
+    if pending:
+        db.execute(text("""
+            UPDATE response_suggestions SET status = 'approved', reviewed_by = :user WHERE case_id = :case_id AND status = 'pending_review'
+        """), {"user": principal.user.id, "case_id": case_id})
+        summary["ai_draft"] = "sent as drafted" if pending.draft_text.strip() == message_body else "edited by staff before sending"
+    _record(db, principal, case_id, "reply_sent", summary)
     if case["status"] == "open":
         db.execute(
             text("UPDATE complaint_cases SET status = 'in_progress'::case_status_t WHERE id = :id"),
@@ -311,4 +365,66 @@ def retry_message(case_id: uuid.UUID, message_id: uuid.UUID, background: Backgro
     _record(db, principal, case_id, "reply_retried", {"delivery_status": "queued"})
     db.commit()
     background.add_task(process_outbox)
+    return _out(db, _case_row(db, case_id, principal.membership.store_id))
+
+
+@router.get("/api/classifier/status")
+def classifier_status(principal: Principal = Depends(current_principal)):
+    return classifier.status()
+
+
+@router.get("/api/drafting/status")
+def drafting_status(principal: Principal = Depends(current_principal)):
+    return drafting.provider_status()
+
+
+@router.post("/api/cases/{case_id}/draft")
+def generate_draft(case_id: uuid.UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    """Retrieve policy evidence for the latest complaint and draft a reply for staff review."""
+    case = _case_row(db, case_id, principal.membership.store_id)
+    _require_case_access(principal, case)
+    if case["status"] == "resolved":
+        raise HTTPException(status_code=409, detail="Reopen the case before drafting a reply")
+    outcome = drafting.generate_for_case(db, case_id, principal.membership.store_id, principal.user.id)
+    db.commit()
+    return {
+        "state": outcome.state, "message": outcome.message,
+        "evidence": [EvidenceOut(chunk_id=p.chunk_id, title=p.title, version=p.version, text=p.text, score=p.score) for p in outcome.passages],
+        "case": _out(db, _case_row(db, case_id, principal.membership.store_id)),
+    }
+
+
+@router.post("/api/cases/{case_id}/draft/dismiss", response_model=CaseOut)
+def dismiss_draft(case_id: uuid.UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    case = _case_row(db, case_id, principal.membership.store_id)
+    _require_case_access(principal, case)
+    dismissed = db.execute(text("""
+        UPDATE response_suggestions SET status = 'rejected', reviewed_by = :user
+        WHERE case_id = :case_id AND status = 'pending_review'
+    """), {"user": principal.user.id, "case_id": case_id}).rowcount
+    if dismissed:
+        _record(db, principal, case_id, "draft_dismissed", {"reason": "Staff chose not to use the AI draft"})
+        db.commit()
+    return _out(db, _case_row(db, case_id, principal.membership.store_id))
+
+
+@router.post("/api/cases/{case_id}/analyse", response_model=CaseOut)
+def reanalyse_case(case_id: uuid.UUID, principal: Principal = Depends(current_principal), db: Session = Depends(get_db)):
+    case = _case_row(db, case_id, principal.membership.store_id)
+    _require_case_access(principal, case)
+    if classifier.state != "ready":
+        raise HTTPException(status_code=503, detail=classifier.error or "The complaint classifier is still loading; try again shortly")
+    # Latest customer message that is an actual complaint (greetings / "ok" / media-only are skipped).
+    candidates = db.execute(text("""
+        SELECT id, body FROM messages WHERE case_id = :case_id AND direction = 'incoming'
+        ORDER BY sent_at DESC LIMIT 20
+    """), {"case_id": case_id}).all()
+    message = next((m for m in candidates if analysable_text(m.body)), None)
+    if not message:
+        raise HTTPException(status_code=409, detail="This case has no customer complaint text to analyse yet (only greetings or media)")
+    result = analyse_message(db, message.id, message.body)
+    _record(db, principal, case_id, "case_reanalysed", {
+        "category": result["category"].replace("_", " "), "urgency": result["urgency"], "sentiment": result["sentiment"],
+    })
+    db.commit()
     return _out(db, _case_row(db, case_id, principal.membership.store_id))
