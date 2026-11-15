@@ -1,0 +1,5 @@
+# Large datasets and trained models: share via Google Drive, not GitHub (100 MB file limit)
+ml/Pakistan Largest Ecommerce Dataset.csv
+backend/models/
+backend/qdrant_data/
+*.zip
