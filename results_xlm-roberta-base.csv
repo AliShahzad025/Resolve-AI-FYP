@@ -1,0 +1,7 @@
+model,task,macro_f1,accuracy,macro_f1_en,macro_f1_mixed,macro_f1_roman_urdu
+baseline,category,0.674,0.668,0.829,0.6,0.333
+baseline,urgency,0.747,0.746,0.767,0.73,0.738
+baseline,sentiment,0.682,0.699,0.991,0.794,0.651
+xlm-roberta-base,category,0.854,0.849,1.0,0.696,0.624
+xlm-roberta-base,urgency,0.87,0.87,0.91,0.839,0.87
+xlm-roberta-base,sentiment,0.746,0.761,0.982,0.892,0.708

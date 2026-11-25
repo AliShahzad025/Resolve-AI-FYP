@@ -30,7 +30,7 @@ SCOPES = "read_orders,read_customers"
 ORDER_QUERY = """query Orders($first:Int!, $after:String) {
   orders(first:$first, after:$after, sortKey:CREATED_AT, reverse:true) {
     edges { cursor node {
-      id legacyResourceId name createdAt updatedAt displayFinancialStatus fulfillmentStatus: displayFulfillmentStatus currencyCode
+      id legacyResourceId name createdAt updatedAt cancelledAt displayFinancialStatus fulfillmentStatus: displayFulfillmentStatus currencyCode
       totalPriceSet { shopMoney { amount currencyCode } }
       customer { legacyResourceId displayName email phone }
       shippingAddress { city provinceCode countryCodeV2 }
@@ -210,7 +210,8 @@ def _money(order: dict) -> tuple[Decimal, str]:
 def _outcome(order: dict) -> str:
     financial = str(order.get("displayFinancialStatus", order.get("financial_status", ""))).upper()
     fulfillment = str(order.get("fulfillmentStatus", order.get("fulfillment_status", ""))).upper()
-    if order.get("cancelled_at") or financial == "VOIDED":
+    # Webhooks (REST payloads) send "cancelled_at"; the GraphQL sync sends "cancelledAt".
+    if order.get("cancelled_at") or order.get("cancelledAt") or financial == "VOIDED":
         return "cancelled"
     if financial in {"REFUNDED", "PARTIALLY_REFUNDED"}:
         return "refunded" if financial == "REFUNDED" else "partially_refunded"

@@ -3,3 +3,8 @@ ml/Pakistan Largest Ecommerce Dataset.csv
 backend/models/
 backend/qdrant_data/
 *.zip
+
+# Trained XLM-R model folders (~547 MB each): share via Google Drive
+/category/
+/sentiment/
+/urgency/
